@@ -2,99 +2,144 @@ import socket
 import threading
 import json
 import os
-
+import time
 
 HOST = "0.0.0.0"
-
-PORT = int(
-    os.environ.get(
-        "PORT",
-        "5000"
-    )
-)
-
+PORT = int(os.environ.get("PORT", "5000"))
 
 clients = {}
 players = {}
+traps = {}
 
 next_id = 1
-
 lock = threading.Lock()
 
-
-# =========================================================
-# SEND
-# =========================================================
 
 def send(client, data):
 
     try:
-
-        message = json.dumps(data) + "\n"
-
         client.sendall(
-            message.encode("utf-8")
+            (json.dumps(data) + "\n").encode()
         )
-
         return True
-
     except:
-
         return False
 
 
-# =========================================================
-# BROADCAST
-# =========================================================
+def get_state():
 
-def broadcast():
+    now = time.monotonic()
 
     with lock:
 
-        message = json.dumps({
-            "type": "players",
-            "players": players
-        }) + "\n"
+        expired = []
 
-        data = message.encode("utf-8")
+        for key, expire in traps.items():
 
-        disconnected = []
+            if expire <= now:
+                expired.append(key)
 
-        for player_id, client in list(
+        for key in expired:
+            traps.pop(key, None)
+
+        trap_data = {}
+
+        for key, expire in traps.items():
+
+            trap_data[key] = {
+                "remaining": round(
+                    expire - now,
+                    3
+                )
+            }
+
+        return {
+            "type": "state",
+            "players": dict(players),
+            "traps": trap_data
+        }
+
+
+def broadcast():
+
+    packet = get_state()
+
+    dead = []
+
+    with lock:
+
+        for pid, client in list(
             clients.items()
         ):
 
-            try:
+            if not send(client, packet):
+                dead.append(pid)
 
-                client.sendall(data)
-
-            except:
-
-                disconnected.append(
-                    player_id
-                )
-
-        for player_id in disconnected:
-
-            clients.pop(
-                player_id,
-                None
-            )
-
-            players.pop(
-                str(player_id),
-                None
-            )
+        for pid in dead:
+            clients.pop(pid, None)
+            players.pop(str(pid), None)
 
 
-# =========================================================
-# CLIENT
-# =========================================================
+def trigger_trap(pid, level, index):
 
-def handle_client(
-    client,
-    player_id
-):
+    locations = {
+
+        1: [
+            (220, 560, 80),
+            (500, 560, 90),
+            (850, 560, 100)
+        ],
+
+        2: [
+            (180, 560, 150),
+            (490, 560, 160),
+            (800, 560, 150)
+        ],
+
+        3: [
+            (150, 560, 150),
+            (440, 560, 160),
+            (730, 560, 170)
+        ]
+    }
+
+    if level not in locations:
+        return
+
+    if index < 0 or index >= len(locations[level]):
+        return
+
+    with lock:
+
+        p = players.get(str(pid))
+
+        if not p:
+            return
+
+        if int(p.get("level", 1)) != level:
+            return
+
+        x, y, width = locations[level][index]
+
+        player_x = float(
+            p.get("x", 0)
+        )
+
+        center = x + width / 2
+
+        # player must actually be near trap
+        if abs(player_x - center) > 180:
+            return
+
+        key = f"{level}:{index}"
+
+        # spikes stay up briefly
+        traps[key] = (
+            time.monotonic() + 1.35
+        )
+
+
+def client_thread(client, pid):
 
     buffer = ""
 
@@ -104,7 +149,7 @@ def handle_client(
             client,
             {
                 "type": "welcome",
-                "id": player_id
+                "id": pid
             }
         )
 
@@ -115,9 +160,7 @@ def handle_client(
             if not data:
                 break
 
-            buffer += data.decode(
-                "utf-8"
-            )
+            buffer += data.decode()
 
             while "\n" in buffer:
 
@@ -130,131 +173,88 @@ def handle_client(
                     continue
 
                 try:
-
-                    message = json.loads(
-                        line
-                    )
-
+                    packet = json.loads(line)
                 except:
-
                     continue
 
-                if message.get(
+                if packet.get("type") == "player":
+
+                    try:
+
+                        x = float(
+                            packet.get(
+                                "x",
+                                60
+                            )
+                        )
+
+                        y = float(
+                            packet.get(
+                                "y",
+                                490
+                            )
+                        )
+
+                        level = int(
+                            packet.get(
+                                "level",
+                                1
+                            )
+                        )
+
+                    except:
+                        continue
+
+                    with lock:
+
+                        players[str(pid)] = {
+                            "x": max(
+                                -100,
+                                min(1200, x)
+                            ),
+                            "y": max(
+                                -300,
+                                min(900, y)
+                            ),
+                            "level": max(
+                                1,
+                                min(3, level)
+                            )
+                        }
+
+                elif packet.get(
                     "type"
-                ) != "update":
+                ) == "trigger_trap":
 
-                    continue
-
-                x = float(
-                    message.get(
-                        "x",
-                        100
+                    trigger_trap(
+                        pid,
+                        int(packet.get("level", 1)),
+                        int(packet.get("index", 0))
                     )
-                )
 
-                y = float(
-                    message.get(
-                        "y",
-                        490
-                    )
-                )
-
-                level = int(
-                    message.get(
-                        "level",
-                        1
-                    )
-                )
-
-                state = message.get(
-                    "state",
-                    "playing"
-                )
-
-                # Basic limits
-
-                x = max(
-                    -100,
-                    min(
-                        1200,
-                        x
-                    )
-                )
-
-                y = max(
-                    -300,
-                    min(
-                        900,
-                        y
-                    )
-                )
-
-                level = max(
-                    1,
-                    min(
-                        3,
-                        level
-                    )
-                )
-
-                with lock:
-
-                    players[
-                        str(player_id)
-                    ] = {
-
-                        "x": x,
-
-                        "y": y,
-
-                        "level": level,
-
-                        "state": state
-                    }
-
-                broadcast()
-
-    except Exception as error:
-
-        print(
-            "Player error:",
-            error
-        )
+    except Exception as e:
+        print("Player error:", e)
 
     finally:
 
         with lock:
-
-            clients.pop(
-                player_id,
-                None
-            )
-
-            players.pop(
-                str(player_id),
-                None
-            )
-
-        broadcast()
+            clients.pop(pid, None)
+            players.pop(str(pid), None)
 
         try:
-
             client.close()
-
         except:
-
             pass
 
-        print(
-            "Player",
-            player_id,
-            "disconnected"
-        )
+        print("Player", pid, "left")
 
 
-# =========================================================
-# SERVER
-# =========================================================
+def broadcast_loop():
+
+    while True:
+        broadcast()
+        time.sleep(0.05)
+
 
 server = socket.socket(
     socket.AF_INET,
@@ -273,15 +273,18 @@ server.bind(
 
 server.listen(50)
 
-
 print()
-print("================================")
-print("       DARK RUNNER ONLINE")
-print("================================")
-print()
-print("Server is running.")
+print("==============================")
+print("    DARK RUNNER ONLINE")
+print("==============================")
+print("Server running...")
 print("Port:", PORT)
 print()
+
+threading.Thread(
+    target=broadcast_loop,
+    daemon=True
+).start()
 
 
 while True:
@@ -290,37 +293,26 @@ while True:
 
     with lock:
 
-        player_id = next_id
-
+        pid = next_id
         next_id += 1
 
-        clients[player_id] = client
+        clients[pid] = client
 
-        players[
-            str(player_id)
-        ] = {
-
-            "x": 80,
-
+        players[str(pid)] = {
+            "x": 60,
             "y": 490,
-
-            "level": 1,
-
-            "state": "playing"
+            "level": 1
         }
 
     print(
         "Player",
-        player_id,
+        pid,
         "connected:",
         address
     )
 
     threading.Thread(
-        target=handle_client,
-        args=(
-            client,
-            player_id
-        ),
+        target=client_thread,
+        args=(client, pid),
         daemon=True
     ).start()

@@ -7,106 +7,72 @@ from tkinter import simpledialog
 
 pygame.init()
 
-WIDTH = 1100
-HEIGHT = 650
-FPS = 60
-
+WIDTH, HEIGHT = 1100, 650
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Dark Runner Online")
-
 clock = pygame.time.Clock()
 
-# =========================================================
-# COLORS
-# =========================================================
-
-BG = (7, 9, 18)
-GRID = (15, 19, 34)
-GROUND = (30, 34, 52)
-
+# ---------- COLORS ----------
+BG = (7, 8, 16)
+GRID = (15, 18, 30)
+GROUND = (35, 39, 56)
+GROUND_TOP = (75, 82, 105)
 WHITE = (240, 245, 255)
-BLUE = (45, 150, 255)
-CYAN = (40, 225, 255)
-PURPLE = (160, 85, 255)
-
-RED = (240, 55, 70)
-DARK_RED = (120, 25, 35)
-
+BLUE = (40, 160, 255)
+PURPLE = (170, 80, 255)
+CYAN = (40, 230, 255)
+RED = (245, 50, 60)
 GREEN = (50, 220, 120)
-YELLOW = (240, 210, 70)
+BLACK = (2, 3, 7)
 
-# =========================================================
-# NETWORK
-# =========================================================
-
+# ---------- NETWORK ----------
 sock = None
-my_id = None
-
-other_players = {}
-
 network_running = False
+my_id = None
+players = {}
+server_traps = {}
+lock = threading.Lock()
 
 
-def send_data(data):
-    global sock
-
-    if sock is None:
-        return
-
+def send(data):
     try:
-        message = json.dumps(data) + "\n"
-        sock.sendall(message.encode("utf-8"))
+        sock.sendall((json.dumps(data) + "\n").encode())
     except:
         pass
 
 
-def receive_network():
-    global my_id
-    global network_running
-    global other_players
+def receive():
+    global my_id, players, server_traps, network_running
 
     buffer = ""
 
     while network_running:
-
         try:
-            data = sock.recv(8192)
+            data = sock.recv(16384)
 
             if not data:
                 break
 
-            buffer += data.decode("utf-8")
+            buffer += data.decode()
 
             while "\n" in buffer:
-
                 line, buffer = buffer.split("\n", 1)
 
                 if not line:
                     continue
 
                 try:
-                    message = json.loads(line)
+                    packet = json.loads(line)
                 except:
                     continue
 
-                if message.get("type") == "welcome":
+                if packet["type"] == "welcome":
+                    my_id = packet["id"]
 
-                    my_id = message.get("id")
-
-                elif message.get("type") == "players":
-
-                    players = message.get("players", {})
-
-                    new_players = {}
-
-                    for player_id, player in players.items():
-
-                        if str(player_id) == str(my_id):
-                            continue
-
-                        new_players[player_id] = player
-
-                    other_players = new_players
+                elif packet["type"] == "state":
+                    with lock:
+                        players = packet.get("players", {})
+                        server_traps = packet.get("traps", {})
 
         except:
             break
@@ -114,177 +80,124 @@ def receive_network():
     network_running = False
 
 
-# =========================================================
-# CONNECTION WINDOW
-# =========================================================
-
-def connection_window():
-
+def connect_window():
     root = tk.Tk()
-
     root.withdraw()
 
-    server = simpledialog.askstring(
+    address = simpledialog.askstring(
         "Dark Runner Online",
         "Server address:\nExample: 127.0.0.1"
     )
 
-    if not server:
+    if not address:
         root.destroy()
         return None, None
 
     port = simpledialog.askinteger(
         "Dark Runner Online",
-        "Server port:\nExample: 5000",
+        "Port:",
         initialvalue=5000,
         minvalue=1,
         maxvalue=65535
     )
 
     root.destroy()
-
-    if not port:
-        return None, None
-
-    return server, port
+    return address, port
 
 
-def connect_to_server(server, port):
-
-    global sock
-    global network_running
+def connect(address, port):
+    global sock, network_running
 
     try:
-
-        sock = socket.socket(
-            socket.AF_INET,
-            socket.SOCK_STREAM
-        )
-
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(8)
-
-        sock.connect(
-            (server, port)
-        )
-
+        sock.connect((address, port))
         sock.settimeout(None)
 
         network_running = True
 
-        thread = threading.Thread(
-            target=receive_network,
+        threading.Thread(
+            target=receive,
             daemon=True
-        )
-
-        thread.start()
+        ).start()
 
         return True
 
-    except Exception as error:
-
-        print("Connection error:", error)
-
+    except Exception as e:
+        print("Connection error:", e)
         return False
 
 
 # =========================================================
-# LEVEL DATA
+# 3 LEVELS
 # =========================================================
 
 LEVELS = {
 
     1: {
-        "spawn": (80, 490),
+        "spawn": (60, 490),
 
         "platforms": [
             (0, 560, 1100, 90),
-            (300, 450, 180, 30),
-            (650, 360, 180, 30)
+            (300, 440, 180, 30),
+            (650, 350, 180, 30)
         ],
 
         "traps": [
-            {
-                "x": 500,
-                "y": 560,
-                "width": 100,
-                "delay": 120
-            }
+            (220, 560, 80),
+            (500, 560, 90),
+            (850, 560, 100)
         ],
 
-        "finish": (1000, 500, 50, 60)
+        "finish": (1010, 500, 45, 60)
     },
 
     2: {
-        "spawn": (80, 490),
-
-        "platforms": [
-            (0, 560, 230, 90),
-            (360, 560, 190, 90),
-            (700, 560, 400, 90),
-
-            (250, 420, 120, 30),
-            (600, 350, 150, 30),
-            (850, 280, 150, 30)
-        ],
-
-        "traps": [
-            {
-                "x": 230,
-                "y": 560,
-                "width": 130,
-                "delay": 90
-            },
-
-            {
-                "x": 550,
-                "y": 560,
-                "width": 150,
-                "delay": 160
-            }
-        ],
-
-        "finish": (1000, 220, 50, 60)
-    },
-
-    3: {
-        "spawn": (80, 490),
+        "spawn": (60, 490),
 
         "platforms": [
             (0, 560, 180, 90),
-            (300, 560, 160, 90),
-            (600, 560, 150, 90),
-            (900, 560, 200, 90),
+            (330, 560, 160, 90),
+            (650, 560, 150, 90),
+            (950, 560, 150, 90),
 
-            (200, 420, 120, 30),
-            (400, 320, 120, 30),
-            (600, 220, 120, 30),
-            (800, 320, 120, 30)
+            (210, 430, 120, 30),
+            (500, 350, 120, 30),
+            (780, 270, 130, 30)
         ],
 
         "traps": [
-            {
-                "x": 180,
-                "y": 560,
-                "width": 120,
-                "delay": 70
-            },
-
-            {
-                "x": 460,
-                "y": 560,
-                "width": 140,
-                "delay": 110
-            },
-
-            {
-                "x": 750,
-                "y": 560,
-                "width": 150,
-                "delay": 150
-            }
+            (180, 560, 150),
+            (490, 560, 160),
+            (800, 560, 150)
         ],
 
-        "finish": (1000, 500, 50, 60)
+        "finish": (1030, 500, 45, 60)
+    },
+
+    3: {
+        "spawn": (50, 490),
+
+        "platforms": [
+            (0, 560, 150, 90),
+            (300, 560, 140, 90),
+            (600, 560, 130, 90),
+            (900, 560, 200, 90),
+
+            (170, 430, 110, 30),
+            (350, 330, 110, 30),
+            (530, 230, 110, 30),
+            (720, 330, 110, 30),
+            (850, 430, 100, 30)
+        ],
+
+        "traps": [
+            (150, 560, 150),
+            (440, 560, 160),
+            (730, 560, 170)
+        ],
+
+        "finish": (1020, 500, 45, 60)
     }
 }
 
@@ -293,202 +206,146 @@ LEVELS = {
 # PLAYER
 # =========================================================
 
-player = pygame.Rect(
-    80,
-    490,
-    40,
-    70
-)
+player = pygame.Rect(60, 490, 38, 68)
 
 velocity_y = 0
-
-MOVE_SPEED = 5
-GRAVITY = 0.8
-JUMP_POWER = -15
-
 on_ground = False
 
-current_level = 1
+SPEED = 6
+GRAVITY = 0.75
+JUMP = -14
 
+level = 1
+send_timer = 0
+trap_cooldown = 0
 
-# =========================================================
-# TRAP STATE
-# =========================================================
-
-trap_states = {}
-
-trap_timers = {}
-
-for level_number, level in LEVELS.items():
-
-    trap_states[level_number] = []
-
-    trap_timers[level_number] = []
-
-    for trap in level["traps"]:
-
-        trap_states[level_number].append(False)
-
-        trap_timers[level_number].append(
-            trap["delay"]
-        )
-
-
-# =========================================================
-# RESET
-# =========================================================
 
 def reset_player():
-
     global velocity_y
 
-    spawn_x, spawn_y = LEVELS[current_level]["spawn"]
+    x, y = LEVELS[level]["spawn"]
 
-    player.x = spawn_x
-    player.y = spawn_y
-
+    player.x = x
+    player.y = y
     velocity_y = 0
 
 
 # =========================================================
-# DRAW CHARACTER
+# CHARACTER
 # =========================================================
 
 def draw_character(rect, color):
 
-    # Shadow
-    shadow = pygame.Rect(
-        rect.x + 4,
-        rect.bottom - 7,
-        32,
-        8
-    )
-
-    pygame.draw.ellipse(
-        screen,
-        (3, 4, 9),
-        shadow
-    )
-
-    # Body
-    body = pygame.Rect(
-        rect.x + 7,
-        rect.y + 27,
-        26,
-        30
+    # legs
+    pygame.draw.rect(
+        screen, PURPLE,
+        (rect.x + 6, rect.y + 53, 10, 15),
+        border_radius=4
     )
 
     pygame.draw.rect(
-        screen,
-        color,
-        body,
+        screen, PURPLE,
+        (rect.x + 22, rect.y + 53, 10, 15),
+        border_radius=4
+    )
+
+    # body
+    pygame.draw.rect(
+        screen, color,
+        (rect.x + 6, rect.y + 25, 26, 32),
         border_radius=8
     )
 
-    # Head
-    head = pygame.Rect(
-        rect.x + 4,
-        rect.y,
-        32,
-        32
+    # arms
+    pygame.draw.rect(
+        screen, color,
+        (rect.x, rect.y + 30, 7, 21),
+        border_radius=3
     )
 
     pygame.draw.rect(
-        screen,
-        color,
-        head,
+        screen, color,
+        (rect.x + 31, rect.y + 30, 7, 21),
+        border_radius=3
+    )
+
+    # head
+    pygame.draw.rect(
+        screen, color,
+        (rect.x + 3, rect.y, 32, 32),
         border_radius=11
     )
 
-    # Visor
-    visor = pygame.Rect(
-        rect.x + 9,
-        rect.y + 9,
-        22,
-        9
-    )
-
+    # visor
     pygame.draw.rect(
-        screen,
-        BG,
-        visor,
+        screen, BLACK,
+        (rect.x + 8, rect.y + 9, 22, 10),
         border_radius=4
     )
 
-    # Eye glow
+    # eyes
     pygame.draw.rect(
-        screen,
-        CYAN,
-        (
-            rect.x + 12,
-            rect.y + 11,
-            5,
-            4
-        ),
-        border_radius=2
+        screen, CYAN,
+        (rect.x + 11, rect.y + 12, 5, 4)
     )
 
     pygame.draw.rect(
-        screen,
-        CYAN,
-        (
-            rect.x + 22,
-            rect.y + 11,
-            5,
-            4
-        ),
-        border_radius=2
+        screen, CYAN,
+        (rect.x + 22, rect.y + 12, 5, 4)
     )
 
-    # Arms
-    pygame.draw.rect(
-        screen,
-        color,
-        (
-            rect.x + 1,
-            rect.y + 30,
-            7,
-            22
-        ),
-        border_radius=3
-    )
 
-    pygame.draw.rect(
-        screen,
-        color,
-        (
-            rect.x + 32,
-            rect.y + 30,
-            7,
-            22
-        ),
-        border_radius=3
-    )
+# =========================================================
+# TRAP
+# =========================================================
 
-    # Legs
-    pygame.draw.rect(
-        screen,
-        PURPLE,
-        (
-            rect.x + 7,
-            rect.y + 55,
-            11,
-            15
-        ),
-        border_radius=4
-    )
+def trap_key(index):
+    return f"{level}:{index}"
 
-    pygame.draw.rect(
-        screen,
-        PURPLE,
-        (
-            rect.x + 22,
-            rect.y + 55,
-            11,
-            15
-        ),
-        border_radius=4
-    )
+
+def nearest_trap():
+
+    best = None
+    distance = 99999
+
+    for i, trap in enumerate(
+        LEVELS[level]["traps"]
+    ):
+
+        x, y, width = trap
+        center = x + width / 2
+
+        d = abs(player.centerx - center)
+
+        if d < distance:
+            distance = d
+            best = i
+
+    if distance <= 150:
+        return best
+
+    return None
+
+
+def activate_trap():
+
+    global trap_cooldown
+
+    if trap_cooldown > 0:
+        return
+
+    index = nearest_trap()
+
+    if index is None:
+        return
+
+    send({
+        "type": "trigger_trap",
+        "level": level,
+        "index": index
+    })
+
+    trap_cooldown = 30
 
 
 # =========================================================
@@ -499,109 +356,93 @@ def draw_world():
 
     screen.fill(BG)
 
-    # Grid
-
+    # grid
     for x in range(0, WIDTH, 50):
-
         pygame.draw.line(
-            screen,
-            GRID,
-            (x, 0),
-            (x, HEIGHT)
+            screen, GRID,
+            (x, 0), (x, HEIGHT)
         )
 
     for y in range(0, HEIGHT, 50):
-
         pygame.draw.line(
-            screen,
-            GRID,
-            (0, y),
-            (WIDTH, y)
+            screen, GRID,
+            (0, y), (WIDTH, y)
         )
 
-    level = LEVELS[current_level]
+    data = LEVELS[level]
 
-    # Platforms
+    # normal platforms
+    for p in data["platforms"]:
 
-    for index, platform_data in enumerate(level["platforms"]):
-
-        rect = pygame.Rect(
-            platform_data
-        )
+        r = pygame.Rect(p)
 
         pygame.draw.rect(
             screen,
             GROUND,
-            rect,
-            border_radius=7
+            r,
+            border_radius=5
         )
 
         pygame.draw.line(
             screen,
-            (55, 65, 90),
-            (rect.left, rect.top),
-            (rect.right, rect.top),
+            GROUND_TOP,
+            (r.left, r.top),
+            (r.right, r.top),
             3
         )
 
-    # Traps
+    # traps
+    for i, trap in enumerate(data["traps"]):
 
-    for index, trap in enumerate(level["traps"]):
+        x, y, width = trap
 
-        x = trap["x"]
-        y = trap["y"]
-        width = trap["width"]
+        state = server_traps.get(
+            trap_key(i),
+            {}
+        )
 
-        # Closed floor
+        remaining = float(
+            state.get("remaining", 0)
+        )
 
-        if not trap_states[current_level][index]:
+        if remaining > 0:
 
+            # THE FLOOR IS OPEN
             pygame.draw.rect(
                 screen,
-                GROUND,
-                (
-                    x,
-                    y,
-                    width,
-                    90
-                )
+                BLACK,
+                (x, y, width, 90)
             )
 
-        else:
-
-            # Hole
-            pygame.draw.rect(
-                screen,
-                (2, 3, 7),
-                (
-                    x,
-                    y,
-                    width,
-                    90
-                )
+            # spikes rise FROM INSIDE THE HOLE
+            progress = min(
+                1.0,
+                (1.35 - remaining) / 0.20
             )
 
-            # Spikes
+            spike_height = int(
+                48 * max(0, min(1, progress))
+            )
 
-            spike_count = max(
-                2,
+            count = max(
+                3,
                 width // 25
             )
 
-            spike_width = width / spike_count
+            sw = width / count
 
-            for s in range(spike_count):
+            for n in range(count):
 
-                sx = x + s * spike_width
+                sx = x + n * sw
 
                 points = [
                     (int(sx), int(y)),
                     (
-                        int(sx + spike_width / 2),
-                        int(y - 45)
+                        int(sx + sw / 2),
+                        int(y - spike_height)
                     ),
                     (
-                        int(sx + spike_width),
+                        int(sx + sw),
                         int(y)
                     )
                 ]
@@ -612,18 +453,26 @@ def draw_world():
                     points
                 )
 
-                pygame.draw.line(
-                    screen,
-                    DARK_RED,
-                    points[0],
-                    points[1],
-                    2
-                )
+        else:
 
-    # Finish
+            # CLOSED FLOOR
+            pygame.draw.rect(
+                screen,
+                GROUND,
+                (x, y, width, 90)
+            )
 
+            pygame.draw.line(
+                screen,
+                GROUND_TOP,
+                (x, y),
+                (x + width, y),
+                3
+            )
+
+    # finish
     finish = pygame.Rect(
-        level["finish"]
+        data["finish"]
     )
 
     pygame.draw.rect(
@@ -633,127 +482,75 @@ def draw_world():
         border_radius=8
     )
 
-    pygame.draw.rect(
-        screen,
-        WHITE,
-        (
-            finish.x + 12,
-            finish.y + 12,
-            26,
-            36
-        ),
-        2,
-        border_radius=4
-    )
-
 
 # =========================================================
-# TRAPS
-# =========================================================
-
-def update_traps():
-
-    level = LEVELS[current_level]
-
-    for index, trap in enumerate(level["traps"]):
-
-        trap_timers[current_level][index] -= 1
-
-        if trap_timers[current_level][index] <= 0:
-
-            trap_states[current_level][index] = not trap_states[current_level][index]
-
-            if trap_states[current_level][index]:
-
-                trap_timers[current_level][index] = 120
-
-            else:
-
-                trap_timers[current_level][index] = 180
-
-
-# =========================================================
-# PLAYER COLLISION
+# PHYSICS
 # =========================================================
 
 def update_player():
 
-    global velocity_y
-    global on_ground
+    global velocity_y, on_ground
 
     keys = pygame.key.get_pressed()
 
     if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-
-        player.x -= MOVE_SPEED
+        player.x -= SPEED
 
     if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-
-        player.x += MOVE_SPEED
-
-    # Gravity
+        player.x += SPEED
 
     velocity_y += GRAVITY
-
     player.y += velocity_y
 
     on_ground = False
 
-    level = LEVELS[current_level]
+    for p in LEVELS[level]["platforms"]:
 
-    # Ground / platforms
-
-    for platform_data in level["platforms"]:
-
-        platform = pygame.Rect(
-            platform_data
-        )
+        platform = pygame.Rect(p)
 
         if player.colliderect(platform):
 
             if velocity_y >= 0:
 
-                if player.bottom <= platform.bottom:
+                player.bottom = platform.top
+                velocity_y = 0
+                on_ground = True
 
-                    player.bottom = platform.top
+    # active spikes
+    for i, trap in enumerate(
+        LEVELS[level]["traps"]
+    ):
 
-                    velocity_y = 0
+        x, y, width = trap
 
-                    on_ground = True
-
-    # Trap collision
-
-    for index, trap in enumerate(level["traps"]):
-
-        if not trap_states[current_level][index]:
-
-            continue
-
-        spike_rect = pygame.Rect(
-            trap["x"],
-            trap["y"] - 45,
-            trap["width"],
-            45
+        state = server_traps.get(
+            trap_key(i),
+            {}
         )
 
-        if player.colliderect(spike_rect):
+        if float(
+            state.get("remaining", 0)
+        ) <= 0:
+            continue
 
+        spikes = pygame.Rect(
+            x,
+            y - 48,
+            width,
+            48
+        )
+
+        if player.colliderect(spikes):
             reset_player()
 
-    # Fell into hole
-
+    # fell through an opened hole
     if player.top > HEIGHT:
-
         reset_player()
 
-    # Boundaries
-
     if player.left < 0:
-
         player.left = 0
 
     if player.right > WIDTH:
-
         player.right = WIDTH
 
 
@@ -763,35 +560,27 @@ def update_player():
 
 def check_finish():
 
-    global current_level
+    global level
 
     finish = pygame.Rect(
-        LEVELS[current_level]["finish"]
+        LEVELS[level]["finish"]
     )
 
     if player.colliderect(finish):
 
-        if current_level < 3:
-
-            current_level += 1
-
+        if level < 3:
+            level += 1
             reset_player()
-
         else:
-
-            current_level = 1
-
+            level = 1
             reset_player()
 
 
 # =========================================================
-# NETWORK UPDATE
+# NETWORK
 # =========================================================
 
-send_timer = 0
-
-
-def update_network():
+def network_update():
 
     global send_timer
 
@@ -801,45 +590,38 @@ def update_network():
 
         send_timer = 0
 
-        send_data({
-            "type": "update",
+        send({
+            "type": "player",
             "x": player.x,
             "y": player.y,
-            "level": current_level,
-            "state": "playing"
+            "level": level
         })
 
 
-# =========================================================
-# DRAW OTHER PLAYERS
-# =========================================================
+def draw_players():
 
-def draw_other_players():
+    with lock:
+        snapshot = dict(players)
 
-    for player_id, data in other_players.items():
+    for pid, data in snapshot.items():
 
-        try:
+        if str(pid) == str(my_id):
+            continue
 
-            if int(data.get("level", 1)) != current_level:
-                continue
+        if int(data.get("level", 1)) != level:
+            continue
 
-            x = float(data.get("x", 100))
-            y = float(data.get("y", 490))
+        r = pygame.Rect(
+            int(data.get("x", 100)),
+            int(data.get("y", 490)),
+            38,
+            68
+        )
 
-            remote_rect = pygame.Rect(
-                int(x),
-                int(y),
-                40,
-                70
-            )
-
-            draw_character(
-                remote_rect,
-                PURPLE
-            )
-
-        except:
-            pass
+        draw_character(
+            r,
+            PURPLE
+        )
 
 
 # =========================================================
@@ -850,80 +632,71 @@ def draw_ui():
 
     font = pygame.font.Font(None, 38)
 
-    title = font.render(
-        "DARK RUNNER ONLINE",
-        True,
-        WHITE
-    )
-
     screen.blit(
-        title,
+        font.render(
+            "DARK RUNNER ONLINE",
+            True,
+            WHITE
+        ),
         (25, 20)
     )
 
-    level_text = font.render(
-        f"LEVEL {current_level}    PLAYERS: {len(other_players) + 1}",
-        True,
-        CYAN
-    )
-
     screen.blit(
-        level_text,
+        font.render(
+            f"LEVEL {level}",
+            True,
+            CYAN
+        ),
         (25, 60)
     )
 
     small = pygame.font.Font(None, 25)
 
-    controls = small.render(
-        "A/D or ARROWS = MOVE     SPACE = JUMP     ESC = EXIT",
-        True,
-        (150, 160, 180)
-    )
-
     screen.blit(
-        controls,
-        (25, 105)
+        small.render(
+            "A/D = MOVE    SPACE/W = JUMP    E = TRAP",
+            True,
+            (170, 175, 190)
+        ),
+        (25, 98)
     )
 
 
 # =========================================================
-# MAIN
+# START
 # =========================================================
 
-server, port = connection_window()
+address, port = connect_window()
 
-if server is None:
-
+if not address:
     pygame.quit()
-
     raise SystemExit
 
+if not connect(address, port):
 
-if not connect_to_server(server, port):
+    print("Could not connect to server.")
 
     pygame.quit()
-
-    raise SystemExit(
-        "Could not connect to server."
-    )
+    raise SystemExit
 
 
 running = True
 
 while running:
 
-    clock.tick(FPS)
+    clock.tick(60)
+
+    if trap_cooldown > 0:
+        trap_cooldown -= 1
 
     for event in pygame.event.get():
 
         if event.type == pygame.QUIT:
-
             running = False
 
         if event.type == pygame.KEYDOWN:
 
             if event.key == pygame.K_ESCAPE:
-
                 running = False
 
             if event.key in (
@@ -933,26 +706,18 @@ while running:
             ):
 
                 if on_ground:
+                    velocity_y = JUMP
 
-                    velocity_y = JUMP_POWER
+            if event.key == pygame.K_e:
+                activate_trap()
 
     update_player()
-
-    update_traps()
-
     check_finish()
-
-    update_network()
+    network_update()
 
     draw_world()
-
-    draw_other_players()
-
-    draw_character(
-        player,
-        BLUE
-    )
-
+    draw_players()
+    draw_character(player, BLUE)
     draw_ui()
 
     pygame.display.flip()
